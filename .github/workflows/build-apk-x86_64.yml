@@ -13,6 +13,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install build tools for apk-tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build libssl-dev zlib1g-dev libzstd-dev scdoc lua5.3 liblua5.3-dev
+
+      - name: Build apk-tools (v3 with mkpkg support)
+        run: |
+          git clone --depth 1 --branch v3.0.0_rc1 https://github.com/alpinelinux/apk-tools.git /tmp/apk-tools
+          cd /tmp/apk-tools
+          meson setup \
+            -Ddocs=disabled \
+            -Dtests=disabled \
+            -Dhelp=disabled \
+            -Dcrypto_backend=openssl \
+            -Dlua_version=5.3 \
+            build
+          ninja -C build src/apk
+          sudo install -m 755 build/src/apk /usr/local/bin/apk
+          apk --version
+          apk mkpkg --help || true
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -30,21 +51,12 @@ jobs:
           go-version: '1.25.3'
           cache: true
 
-      - name: Embed frontend and build backend
+      - name: Embed frontend and build backend (linux/amd64)
         run: |
           rm -rf app/webui/dist
           cp -r dist app/webui/dist
           mkdir -p build
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/sing-box-easy ./main.go
-
-      - name: Download ImmortalWrt SDK for apk tool
-        run: |
-          mkdir -p /tmp/immortalwrt-sdk
-          BASE_URL="https://downloads.immortalwrt.org/releases/25.12.1/targets/x86/64"
-          SDK_FILE=$(curl -fsSL "$BASE_URL/" | grep -oE 'immortalwrt-sdk-25\.12\.1-x86-64[^"<>]*\.Linux-x86_64\.tar\.(zst|xz)' | head -n 1)
-          echo "Downloading $SDK_FILE"
-          curl -fsSL "$BASE_URL/$SDK_FILE" -o /tmp/sdk.tar
-          tar -xf /tmp/sdk.tar -C /tmp/immortalwrt-sdk --strip-components=1 staging_dir/host/bin/apk
 
       - name: Assemble ImmortalWrt APK package
         run: |
@@ -72,7 +84,7 @@ jobs:
           /etc/config/sing-box-easy
           EOF
 
-          # 安装脚本
+          # 安装/卸载 maintainer scripts
           cat > "$SCRIPTS/post-install" << 'EOF'
           #!/bin/sh
           [ -f /etc/sing-box-easy/app.yml ] || cp /etc/sing-box-easy/app.yml.example /etc/sing-box-easy/app.yml
@@ -104,8 +116,7 @@ jobs:
           chmod +x "$SCRIPTS/post-install" "$SCRIPTS/pre-deinstall"
 
           mkdir -p apk-out
-          APK_TOOL="/tmp/immortalwrt-sdk/staging_dir/host/bin/apk"
-          SOURCE_DATE_EPOCH=0 "$APK_TOOL" mkpkg \
+          SOURCE_DATE_EPOCH=0 apk mkpkg \
             --info "name:sing-box-easy" \
             --info "version:1.4.0" \
             --info "description:Web panel for managing sing-box configurations and lifecycle" \
